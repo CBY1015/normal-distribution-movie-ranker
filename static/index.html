@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>電影排名與評分系統</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a; --card-color: #2a2a2a; --text-color: #e0e0e0;
+            --primary-color: #007bff; --border-color: #444; --danger-color: #dc3545;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background-color: var(--bg-color); color: var(--text-color); margin: 0; padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1, h2, h3 { color: var(--text-color); }
+        .top-bar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 20px; }
+        .search-bar { flex-grow: 1; display: flex; }
+        input[type="text"], input[type="password"] {
+            flex-grow: 1; padding: 10px; background-color: var(--card-color);
+            border: 1px solid var(--border-color); color: var(--text-color); border-radius: 5px;
+        }
+        button {
+            padding: 10px 15px; border: none; background-color: var(--primary-color);
+            color: white; border-radius: 5px; cursor: pointer; margin-left: 10px;
+        }
+        button:hover { opacity: 0.9; }
+        button:disabled { background-color: #555; cursor: not-allowed; }
+        .secondary-btn { background-color: #6c757d; }
+        .danger-btn { background-color: var(--danger-color); }
+        .movie-list-header, .main-header { display: flex; justify-content: space-between; align-items: center; }
+        .movie-list-item, .search-result-item {
+            display: flex; align-items: center; background-color: var(--card-color);
+            border: 1px solid var(--border-color); padding: 10px; margin-top: 10px; border-radius: 5px;
+        }
+        .movie-rank { font-size: 1.5em; font-weight: bold; margin-right: 15px; }
+        .movie-title { flex-grow: 1; }
+        .movie-rating { margin-left: 15px; }
+        .review-btn { background-color: #555; padding: 5px 10px; margin-left: 10px; }
+        .review-btn--has-review { background-color: var(--primary-color); }
+        .delete-btn { background-color: var(--danger-color); padding: 5px 10px; margin-left: 5px; }
+        .modal-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.7);
+            display: none; justify-content: center; align-items: center; z-index: 1000;
+        }
+        .modal-content {
+            background-color: var(--bg-color); padding: 20px; border-radius: 10px;
+            border: 1px solid var(--border-color); max-width: 90%; text-align: center;
+        }
+        .comparison-container { display: flex; gap: 20px; }
+        .comparison-item, .discovery-item { text-align: center; cursor: pointer; }
+        .comparison-item img, .discovery-item img { width: 150px; border-radius: 5px; }
+        textarea {
+            width: calc(100% - 22px); height: 150px; background-color: var(--card-color);
+            border: 1px solid var(--border-color); color: var(--text-color); padding: 10px; margin-top: 10px;
+        }
+        .login-container {
+            width: 100%; max-width: 400px; margin: 100px auto;
+            background-color: var(--card-color); padding: 30px; border-radius: 10px;
+        }
+        .login-container h2 { text-align: center; }
+        .login-container .input-group { margin-bottom: 20px; }
+        .login-container input { width: calc(100% - 22px); }
+        .login-container .button-group { display: flex; gap: 10px; }
+        .login-container .button-group button { flex-grow: 1; margin: 0; }
+        #errorMessage { color: var(--danger-color); text-align: center; height: 20px; }
+    </style>
+</head>
+<body>
+    <div id="loginScreen">
+        <div class="login-container">
+            <h2>電影排名系統</h2>
+            <div id="errorMessage"></div>
+            <div class="input-group">
+                <input type="text" id="usernameInput" placeholder="請輸入使用者名稱 (限英數)" autocomplete="username">
+            </div>
+            <div class="button-group">
+                <button id="loginBtn">登入</button>
+                <button id="registerBtn" class="secondary-btn">註冊新帳號</button>
+            </div>
+        </div>
+    </div>
+    
+    <div id="mainAppScreen" style="display: none;">
+        <div class="container">
+            <div class="main-header">
+                <h1>電影排名與評分系統</h1>
+                <div>
+                    <span id="currentUserDisplay" style="margin-right: 20px;"></span>
+                    <button id="logoutBtn" class="danger-btn">登出</button>
+                </div>
+            </div>
+
+            <div class="top-bar">
+                <div class="search-bar">
+                    <input type="text" id="searchInput" placeholder="輸入電影名稱進行搜尋並新增...">
+                    <button id="searchBtn">搜尋</button>
+                </div>
+                <button id="exportBtn" class="secondary-btn">匯出為 CSV</button>
+                <button id="randomBtn" class="secondary-btn">隨機探索 🎲</button>
+            </div>
+            
+            <div id="searchResults" style="margin-top: 20px;"></div>
+            <hr style="border-color: var(--border-color); margin: 20px 0;">
+            
+            <div class="movie-list-header">
+                <h2>我的電影排名</h2>
+                <div>
+                    <button id="ratingModeBtn" class="secondary-btn">切換為線性分布</button>
+                    <button id="clearAllBtn" class="danger-btn">全部清空</button>
+                </div>
+            </div>
+            <div id="rankedList"></div>
+        </div>
+    </div>
+
+    <div id="comparisonModal" class="modal-overlay">
+        <div class="modal-content">
+            <h2>排名對決！請選擇您更喜歡的電影</h2>
+            <div id="comparisonContainer" class="comparison-container"></div>
+        </div>
+    </div>
+    <div id="reviewModal" class="modal-overlay">
+        <div class="modal-content" style="width: 500px;">
+            <h2 id="reviewTitle"></h2>
+            <textarea id="reviewTextarea" placeholder="請在此輸入您的評價..."></textarea>
+            <div style="text-align: right; margin-top: 10px;">
+                <button id="saveReviewBtn">儲存評價</button>
+                <button id="cancelReviewBtn" class="secondary-btn">取消</button>
+            </div>
+        </div>
+    </div>
+    <div id="discoveryModal" class="modal-overlay">
+        <div class="modal-content" style="width: 400px;">
+            <h2>電影探索</h2>
+            <div id="discoveryItemContainer" class="discovery-item"></div>
+            <div style="margin-top: 15px;">
+                <button id="seenBtn">我看過 👍</button>
+                <button id="nextBtn" class="secondary-btn">沒看過/下一部 👎</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE_URL = 'http://127.0.0.1:5000';
+        let currentUser = null;
+        let rankedMovies = [];
+        let movieToRank = null;
+        let binarySearchState = { low: 0, high: 0, mid: 0 };
+        let currentSearchResults = [];
+        let currentRatingMode = 'normal';
+
+        const loginScreen = document.getElementById('loginScreen');
+        const mainAppScreen = document.getElementById('mainAppScreen');
+        const usernameInput = document.getElementById('usernameInput');
+        const loginBtn = document.getElementById('loginBtn');
+        const registerBtn = document.getElementById('registerBtn');
+        const logoutBtn = document.getElementById('logoutBtn');
+        const errorMessageDiv = document.getElementById('errorMessage');
+        const currentUserDisplay = document.getElementById('currentUserDisplay');
+        const searchInput = document.getElementById('searchInput');
+        const searchBtn = document.getElementById('searchBtn');
+        const exportBtn = document.getElementById('exportBtn');
+        const randomBtn = document.getElementById('randomBtn');
+        const clearAllBtn = document.getElementById('clearAllBtn');
+        const ratingModeBtn = document.getElementById('ratingModeBtn');
+        const searchResultsDiv = document.getElementById('searchResults');
+        const rankedListDiv = document.getElementById('rankedList');
+        
+        async function fetchAPI(endpoint, options = {}) {
+            const headers = { ...options.headers };
+            if (currentUser) { headers['X-Username'] = currentUser; }
+            try {
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ error: '發生未知錯誤' }));
+                    console.error(`API Error:`, errorData);
+                    return { error: errorData.error || '發生未知錯誤' };
+                }
+                if (response.status === 204 || response.headers.get("content-length") === "0") return { success: true };
+                return await response.json();
+            } catch (error) {
+                console.error('Network error:', error);
+                return { error: '網路錯誤，無法連接到後端伺服器。' };
+            }
+        }
+
+        async function postAPI(endpoint, body) {
+            return await fetchAPI(endpoint, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+        }
+        
+        async function deleteAPI(endpoint) {
+            return await fetchAPI(endpoint, { method: 'DELETE' });
+        }
+        
+        async function handleLogin() {
+            const username = usernameInput.value.trim();
+            if (!username) { errorMessageDiv.innerText = '請輸入使用者名稱。'; return; }
+            const result = await postAPI('/api/login', { username });
+            if (result && result.success) {
+                loginSuccess(result.username);
+            } else {
+                errorMessageDiv.innerText = result.error || '登入失敗。';
+            }
+        }
+
+        async function handleRegister() {
+            const username = usernameInput.value.trim();
+            if (!username) { errorMessageDiv.innerText = '請輸入使用者名稱。'; return; }
+            const result = await postAPI('/api/register', { username });
+            if (result && result.success) {
+                loginSuccess(result.username);
+            } else {
+                errorMessageDiv.innerText = result.error || '註冊失敗。';
+            }
+        }
+
+        function loginSuccess(username) {
+            currentUser = username;
+            localStorage.setItem('movieRankerUser', username);
+            errorMessageDiv.innerText = '';
+            usernameInput.value = '';
+            loginScreen.style.display = 'none';
+            mainAppScreen.style.display = 'block';
+            currentUserDisplay.innerText = `使用者: ${currentUser}`;
+            fetchRankedMovies();
+        }
+
+        function handleLogout() {
+            currentUser = null;
+            localStorage.removeItem('movieRankerUser');
+            rankedMovies = [];
+            currentRatingMode = 'normal';
+            ratingModeBtn.innerText = '切換為線性分布';
+            mainAppScreen.style.display = 'none';
+            loginScreen.style.display = 'block';
+            renderRankedList();
+        }
+
+        async function fetchRankedMovies() {
+            const movies = await fetchAPI('/api/movies');
+            if (movies && !movies.error) {
+                rankedMovies = movies;
+                renderRankedList();
+            }
+        }
+        
+        function renderRankedList() {
+            rankedListDiv.innerHTML = '';
+            const hasMovies = rankedMovies.length > 0;
+            clearAllBtn.style.display = hasMovies ? 'inline-block' : 'none';
+            ratingModeBtn.style.display = hasMovies ? 'inline-block' : 'none';
+            
+            if (!hasMovies) {
+                rankedListDiv.innerHTML = '<p>尚未新增任何電影。</p>';
+                return;
+            }
+
+            rankedMovies.forEach(movie => {
+                const item = document.createElement('div');
+                item.className = 'movie-list-item';
+                item.innerHTML = `
+                    <div class="movie-rank">#${movie.my_rank}</div>
+                    <div class="movie-title">${movie.title} (${(movie.release_date || 'N/A').substring(0, 4)})</div>
+                    <button class="review-btn ${movie.my_review ? 'review-btn--has-review' : ''}" onclick="promptForReview(${movie.id})">💬</button>
+                    <div class="movie-rating">評分: ${movie.my_rating.toFixed(1)}</div>
+                    <button class="delete-btn" onclick="deleteMovie(${movie.id}, '${movie.title.replace(/'/g, "\\'")}')">🗑️</button>
+                `;
+                rankedListDiv.appendChild(item);
+            });
+        }
+
+        function renderSearchResults(results) {
+            currentSearchResults = results;
+            searchResultsDiv.innerHTML = '<h3>搜尋結果：</h3>';
+            if (!results || results.length === 0) {
+                searchResultsDiv.innerHTML += '<p>找不到相關電影。</p>';
+                return;
+            }
+            results.forEach((movie, index) => {
+                const isRanked = rankedMovies.some(rm => rm.id === movie.id);
+                const item = document.createElement('div');
+                item.className = 'search-result-item';
+                item.innerHTML = `
+                    <img src="${movie.poster_path ? `https://image.tmdb.org/t/p/w200${movie.poster_path}` : 'https://via.placeholder.com/80x120?text=No+Image'}" alt="${movie.title}" width="80" height="120" style="margin-right:15px;">
+                    <div class="movie-title">${movie.title} (${(movie.release_date || 'N/A').substring(0, 4)})</div>
+                    <button onclick='selectMovieToRankByIndex(${index})' ${isRanked ? 'disabled' : ''}>${isRanked ? '已排名' : '新增'}</button>
+                `;
+                searchResultsDiv.appendChild(item);
+            });
+        }
+        
+        ratingModeBtn.onclick = async () => {
+            currentRatingMode = currentRatingMode === 'normal' ? 'linear' : 'normal';
+            ratingModeBtn.innerText = currentRatingMode === 'normal' ? '切換為線性分布' : '切換為常態分布';
+            if(rankedMovies.length === 0) return;
+            const updatedList = await postAPI('/api/rank', { list: rankedMovies, mode: currentRatingMode });
+            if (updatedList && !updatedList.error) {
+                rankedMovies = updatedList;
+                renderRankedList();
+            }
+        };
+
+        searchBtn.onclick = async () => {
+            const title = searchInput.value;
+            if (!title) return;
+            const results = await fetchAPI(`/api/search?title=${encodeURIComponent(title)}`);
+            if (results && !results.error) renderSearchResults(results);
+        };
+
+        exportBtn.onclick = () => {
+            if (rankedMovies.length === 0) { alert('沒有任何電影可以匯出。'); return; }
+            const header = ['tmdbID', 'Title', 'Rating', 'Review'];
+            const rows = rankedMovies.map(movie => {
+                const escapeCSV = (field) => `"${(field || '').toString().replace(/"/g, '""')}"`;
+                return [movie.id, escapeCSV(movie.title), movie.my_rating, escapeCSV(movie.my_review)].join(',');
+            });
+            const csvContent = "data:text/csv;charset=utf-8,\uFEFF" + header.join(',') + "\n" + rows.join("\n");
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", `letterboxd_import_${currentUser}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        randomBtn.onclick = async () => {
+            randomBtn.disabled = true; randomBtn.innerText = "尋找中...";
+            const existingIds = rankedMovies.map(m => m.id).join(',');
+            const movie = await fetchAPI(`/api/random?existing_ids=${existingIds}`);
+            if (movie && movie.id) {
+                const container = document.getElementById('discoveryItemContainer');
+                container.innerHTML = `
+                    <img src="${movie.poster_path ? `https://image.tmdb.org/t/p/w200${movie.poster_path}` : 'https://via.placeholder.com/150x225?text=No+Image'}" alt="${movie.title}">
+                    <h3>${movie.title}</h3>
+                    <p style="font-size: 0.9em; color: #aaa;">${(movie.overview || '無簡介').substring(0, 150)}...</p>`;
+                document.getElementById('seenBtn').onclick = () => {
+                    document.getElementById('discoveryModal').style.display = 'none';
+                    selectMovieToRank(movie);
+                };
+                document.getElementById('nextBtn').onclick = () => { randomBtn.click(); };
+                document.getElementById('discoveryModal').style.display = 'flex';
+            } else {
+                alert('找不到新的隨機電影，請稍後再試。');
+            }
+            randomBtn.disabled = false;
+            randomBtn.innerText = "隨機探索 🎲";
+        };
+
+        clearAllBtn.onclick = async () => {
+            if (confirm('您確定要清空所有電影紀錄嗎？此操作無法復原！')) {
+                const result = await deleteAPI('/api/movies');
+                if (result && result.success) {
+                    rankedMovies = [];
+                    renderRankedList();
+                }
+            }
+        };
+
+        window.deleteMovie = async (movieId, movieTitle) => {
+            if (confirm(`您確定要刪除《${movieTitle}》嗎？`)) {
+                const updatedList = await deleteAPI(`/api/movies/${movieId}?mode=${currentRatingMode}`);
+                if (updatedList && !updatedList.error) {
+                    rankedMovies = updatedList;
+                    renderRankedList();
+                }
+            }
+        };
+        
+        function selectMovieToRankByIndex(index) {
+            const movie = currentSearchResults[index];
+            if (movie) selectMovieToRank(movie);
+        }
+
+        function selectMovieToRank(movie) {
+            rankedMovies = rankedMovies.filter(rm => rm.id !== movie.id);
+            movieToRank = { ...movie, my_review: movie.my_review || '' };
+            searchResultsDiv.innerHTML = '';
+            startRankingProcess();
+        }
+
+        function startRankingProcess() {
+            if (rankedMovies.length === 0) {
+                rankedMovies.unshift(movieToRank);
+                finalizeRanking();
+                return;
+            }
+            binarySearchState = { low: 0, high: rankedMovies.length - 1 };
+            runComparisonStep();
+        }
+
+        function runComparisonStep() {
+            const state = binarySearchState;
+            if (state.low > state.high) {
+                rankedMovies.splice(state.low, 0, movieToRank);
+                finalizeRanking(); return;
+            }
+            state.mid = Math.floor((state.low + state.high) / 2);
+            showComparison(movieToRank, rankedMovies[state.mid]);
+        }
+
+        function showComparison(newMovie, existingMovie) {
+            const comparisonContainer = document.getElementById('comparisonContainer');
+            comparisonContainer.innerHTML = `
+                <div class="comparison-item" onclick="handleComparisonChoice(0)">
+                    <img src="${newMovie.poster_path ? `https://image.tmdb.org/t/p/w200${newMovie.poster_path}` : 'https://via.placeholder.com/150x225?text=No+Image'}" alt="${newMovie.title}"><p>${newMovie.title}</p>
+                </div>
+                <div class="comparison-item" onclick="handleComparisonChoice(1)">
+                    <img src="${existingMovie.poster_path ? `https://image.tmdb.org/t/p/w200${existingMovie.poster_path}` : 'https://via.placeholder.com/150x225?text=No+Image'}" alt="${existingMovie.title}"><p>${existingMovie.title}</p>
+                </div>`;
+            document.getElementById('comparisonModal').style.display = 'flex';
+        }
+
+        window.handleComparisonChoice = (choice) => {
+            document.getElementById('comparisonModal').style.display = 'none';
+            if (choice === 0) binarySearchState.high = binarySearchState.mid - 1;
+            else binarySearchState.low = binarySearchState.mid + 1;
+            runComparisonStep();
+        };
+
+        async function finalizeRanking() {
+            const updatedList = await postAPI('/api/rank', { list: rankedMovies, mode: currentRatingMode });
+            if (updatedList && !updatedList.error) {
+                rankedMovies = updatedList;
+                renderRankedList();
+                promptForReview(movieToRank.id);
+                movieToRank = null;
+            }
+        }
+
+        window.promptForReview = (movieId) => {
+            const movie = rankedMovies.find(m => m.id === movieId);
+            if (!movie) return;
+            const reviewModal = document.getElementById('reviewModal');
+            document.getElementById('reviewTitle').innerText = `為《${movie.title}》新增/編輯評價`;
+            document.getElementById('reviewTextarea').value = movie.my_review || '';
+            document.getElementById('saveReviewBtn').onclick = async () => {
+                const reviewText = document.getElementById('reviewTextarea').value;
+                await postAPI('/api/review', { id: movieId, review: reviewText });
+                reviewModal.style.display = 'none';
+                await fetchRankedMovies();
+            };
+            document.getElementById('cancelReviewBtn').onclick = () => { reviewModal.style.display = 'none'; };
+            reviewModal.style.display = 'flex';
+        };
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loginBtn.onclick = handleLogin;
+            registerBtn.onclick = handleRegister;
+            logoutBtn.onclick = handleLogout;
+            usernameInput.addEventListener('keyup', (event) => {
+                errorMessageDiv.innerText = '';
+                if (event.key === 'Enter') handleLogin();
+            });
+            const savedUser = localStorage.getItem('movieRankerUser');
+            if (savedUser) {
+                loginSuccess(savedUser);
+            }
+        });
+    </script>
+</body>
+</html>
