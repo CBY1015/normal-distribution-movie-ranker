@@ -7,7 +7,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import random
 import re
-from sqlalchemy import create_engine, text
 
 # --- 基本設定 ---
 API_KEY = 'c2a2b97dd7fbdf369708b6ae94e46def' # 您的 TMDB API 金鑰
@@ -20,27 +19,69 @@ CORS(app) # 允許跨來源請求，讓在本機測試的前端能順利呼叫
 
 # 從 Render 平台的環境變數讀取資料庫 URL
 DATABASE_URL = os.environ.get('DATABASE_URL')
-if not DATABASE_URL:
-    # 如果在本機執行且未設定環境變數，可以提供一個備用的本地資料庫路徑
-    # 但為了部署，我們假設 DATABASE_URL 一定會被設定
-    raise RuntimeError("DATABASE_URL is not set in the environment!")
 
-# 建立資料庫連線引擎
-engine = create_engine(DATABASE_URL)
+# 智能資料庫處理：嘗試 PostgreSQL，失敗時使用 SQLite
+USE_SQLITE = False
+engine = None
+
+try:
+    if not DATABASE_URL or len(DATABASE_URL) < 10:
+        raise Exception("DATABASE_URL 無效或未設定")
+    
+    from sqlalchemy import create_engine, text
+    engine = create_engine(DATABASE_URL)
+    
+    # 測試連線
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1")).fetchone()
+    
+    print("✅ 成功連接到 PostgreSQL")
+    USE_SQLITE = False
+    
+except Exception as e:
+    print(f"⚠️ PostgreSQL 連線失敗：{e}")
+    print("🔄 自動切換到 SQLite 備用模式...")
+    USE_SQLITE = True
+    
+    import sqlite3
+    import threading
+    
+    DB_FILE = '/tmp/movie_ranking.db'
+    db_lock = threading.Lock()
 
 def init_db():
     """
     初始化資料庫。在應用程式啟動時執行一次。
     如果儲存使用者資料的 'users' 表格不存在，則會自動建立它。
     """
-    with engine.connect() as connection:
-        connection.execute(text("""
-            CREATE TABLE IF NOT EXISTS users (
-                username VARCHAR(255) PRIMARY KEY,
-                movies JSONB
-            );
-        """))
-        connection.commit()
+    try:
+        if USE_SQLITE:
+            with db_lock:
+                conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                try:
+                    conn.execute('''
+                        CREATE TABLE IF NOT EXISTS users (
+                            username TEXT PRIMARY KEY,
+                            movies TEXT
+                        )
+                    ''')
+                    conn.commit()
+                    print("✅ SQLite 資料庫初始化成功")
+                finally:
+                    conn.close()
+        else:
+            with engine.connect() as connection:
+                connection.execute(text("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        username VARCHAR(255) PRIMARY KEY,
+                        movies JSONB
+                    );
+                """))
+                connection.commit()
+                print("✅ PostgreSQL 資料庫初始化成功")
+    except Exception as e:
+        print(f"❌ 資料庫初始化失敗：{e}")
 
 # --- 輔助函式 ---
 def is_valid_username(username):
@@ -50,31 +91,83 @@ def is_valid_username(username):
 # --- 後端核心邏輯 (改為操作資料庫) ---
 def user_exists(username):
     """檢查資料庫中是否存在指定的使用者。"""
-    with engine.connect() as connection:
-        result = connection.execute(text("SELECT 1 FROM users WHERE username = :user"), {"user": username}).fetchone()
-        return result is not None
+    try:
+        if USE_SQLITE:
+            with db_lock:
+                conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                try:
+                    cursor = conn.execute("SELECT 1 FROM users WHERE username = ?", (username,))
+                    return cursor.fetchone() is not None
+                finally:
+                    conn.close()
+        else:
+            with engine.connect() as connection:
+                result = connection.execute(text("SELECT 1 FROM users WHERE username = :user"), {"user": username}).fetchone()
+                return result is not None
+    except Exception as e:
+        print(f"❌ user_exists 錯誤：{e}")
+        return False
 
 def load_ranked_movies(username):
     """從資料庫讀取指定使用者的電影列表。"""
-    with engine.connect() as connection:
-        result = connection.execute(text("SELECT movies FROM users WHERE username = :user"), {"user": username}).fetchone()
-        # result[0] 存的是電影列表的 JSON 內容
-        if result and result[0]:
-            return result[0]
-        return [] # 如果找不到使用者或沒有電影，回傳空列表
+    try:
+        if USE_SQLITE:
+            with db_lock:
+                conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                try:
+                    cursor = conn.execute("SELECT movies FROM users WHERE username = ?", (username,))
+                    result = cursor.fetchone()
+                    if result and result[0]:
+                        return json.loads(result[0])
+                    return []
+                finally:
+                    conn.close()
+        else:
+            with engine.connect() as connection:
+                result = connection.execute(text("SELECT movies FROM users WHERE username = :user"), {"user": username}).fetchone()
+                # result[0] 存的是電影列表的 JSON 內容
+                if result and result[0]:
+                    return result[0]
+                return [] # 如果找不到使用者或沒有電影，回傳空列表
+    except Exception as e:
+        print(f"❌ load_ranked_movies 錯誤：{e}")
+        return []
 
 def save_ranked_movies(username, movies):
     """將指定使用者的電影列表 (Python list) 轉換成 JSON 字串後存入資料庫。"""
-    movies_json = json.dumps(movies) # 將 list 轉為 JSON 字串
-    with engine.connect() as connection:
-        # 使用 PostgreSQL 的 INSERT ... ON CONFLICT (UPDATE) 語法 (又稱 UPSERT)
-        # 如果使用者已存在，就更新他的 movies 欄位；如果不存在，就新增一筆紀錄。
-        connection.execute(text("""
-            INSERT INTO users (username, movies) VALUES (:user, :movies_json)
-            ON CONFLICT (username) DO UPDATE SET movies = :movies_json;
-        """), {"user": username, "movies_json": movies_json})
-        connection.commit()
-    return True
+    try:
+        if USE_SQLITE:
+            with db_lock:
+                conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+                try:
+                    movies_json = json.dumps(movies)
+                    conn.execute('''
+                        INSERT OR REPLACE INTO users (username, movies) 
+                        VALUES (?, ?)
+                    ''', (username, movies_json))
+                    conn.commit()
+                    return True
+                except Exception as e:
+                    print(f"SQLite 儲存失敗：{e}")
+                    return False
+                finally:
+                    conn.close()
+        else:
+            movies_json = json.dumps(movies) # 將 list 轉為 JSON 字串
+            with engine.connect() as connection:
+                # 使用 PostgreSQL 的 INSERT ... ON CONFLICT (UPDATE) 語法 (又稱 UPSERT)
+                # 如果使用者已存在，就更新他的 movies 欄位；如果不存在，就新增一筆紀錄。
+                connection.execute(text("""
+                    INSERT INTO users (username, movies) VALUES (:user, :movies_json)
+                    ON CONFLICT (username) DO UPDATE SET movies = :movies_json;
+                """), {"user": username, "movies_json": movies_json})
+                connection.commit()
+            return True
+    except Exception as e:
+        print(f"❌ save_ranked_movies 錯誤：{e}")
+        return False
 
 # (以下三個函式是純粹的資料處理或外部 API 請求，不需要修改)
 def search_movie_from_tmdb(title):
@@ -111,7 +204,6 @@ def recalculate_ratings_and_ranks(ranked_list, mode='normal'):
         movie['my_rating'] = score
     return ranked_list
 
-
 # --- API 端點 (Endpoints) ---
 # 每個 @app.route 都是一個前端可以呼叫的網址
 
@@ -119,23 +211,90 @@ def recalculate_ratings_and_ranks(ranked_list, mode='normal'):
 def index():
     """根目錄，直接提供前端的 index.html 檔案。"""
     return app.send_static_file('index.html')
+
+@app.route('/api/db-info', methods=['GET'])
+def get_database_info():
+    """顯示目前使用的資料庫資訊"""
+    try:
+        if USE_SQLITE:
+            with db_lock:
+                conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                try:
+                    cursor = conn.execute("SELECT COUNT(*) FROM users")
+                    user_count = cursor.fetchone()[0]
+                    return jsonify({
+                        'success': True,
+                        'provider': 'SQLite (備用模式)',
+                        'total_users': user_count,
+                        'warning': '⚠️ SQLite 模式：資料會在重新部署時遺失！請設定 Neon。',
+                        'connection_status': 'SQLite Connected'
+                    })
+                finally:
+                    conn.close()
+        else:
+            with engine.connect() as connection:
+                user_count = connection.execute(text("SELECT COUNT(*) FROM users")).fetchone()[0]
+                version_result = connection.execute(text("SELECT version()")).fetchone()
+                
+                provider = "PostgreSQL"
+                if DATABASE_URL and "neon" in DATABASE_URL.lower():
+                    provider = "Neon PostgreSQL"
+                elif DATABASE_URL and "supabase" in DATABASE_URL.lower():
+                    provider = "Supabase PostgreSQL"
+                
+                return jsonify({
+                    'success': True,
+                    'provider': provider,
+                    'total_users': user_count,
+                    'postgresql_version': version_result[0].split(',')[0],
+                    'connection_status': 'PostgreSQL Connected'
+                })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'connection_status': 'Connection failed'
+        }), 500
     
 @app.route('/api/register', methods=['POST'])
 def register_user():
     """處理使用者註冊請求。"""
-    data = request.json; username = data.get('username')
-    if not is_valid_username(username): return jsonify({'error': '無效的使用者名稱，只能使用英文字母和數字。'}), 400
-    if user_exists(username): return jsonify({'error': '此使用者名稱已被註冊。'}), 409
-    if save_ranked_movies(username, []): return jsonify({'success': True, 'username': username})
-    else: return jsonify({'error': '無法創建使用者。'}), 500
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': '無效的請求資料'}), 400
+            
+        username = data.get('username')
+        if not is_valid_username(username): 
+            return jsonify({'error': '無效的使用者名稱，只能使用英文字母和數字。'}), 400
+        if user_exists(username): 
+            return jsonify({'error': '此使用者名稱已被註冊。'}), 409
+        if save_ranked_movies(username, []): 
+            return jsonify({'success': True, 'username': username})
+        else: 
+            return jsonify({'error': '無法創建使用者。'}), 500
+    except Exception as e:
+        print(f"❌ 註冊錯誤：{e}")
+        return jsonify({'error': '發生未知錯誤'}), 500
 
 @app.route('/api/login', methods=['POST'])
 def login_user():
     """處理使用者登入請求。"""
-    data = request.json; username = data.get('username')
-    if not is_valid_username(username): return jsonify({'error': '無效的使用者名稱。'}), 400
-    if not user_exists(username): return jsonify({'error': '使用者不存在。'}), 404
-    return jsonify({'success': True, 'username': username})
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': '無效的請求資料'}), 400
+            
+        username = data.get('username')
+        if not is_valid_username(username): 
+            return jsonify({'error': '無效的使用者名稱。'}), 400
+        if not user_exists(username): 
+            return jsonify({'error': '使用者不存在。'}), 404
+        return jsonify({'success': True, 'username': username})
+    except Exception as e:
+        print(f"❌ 登入錯誤：{e}")
+        return jsonify({'error': '發生未知錯誤'}), 500
 
 def get_username_from_header():
     """從請求的 Header 中獲取使用者名稱，用於驗證身份。"""
@@ -213,5 +372,8 @@ init_db()
 # 這個 if __name__ == '__main__': 區塊主要用於在本機測試
 # 在 Render 上，它會被 gunicorn 指令取代，所以不會被執行
 if __name__ == '__main__':
-    print("後端伺服器已在本機啟動，請用瀏覽器開啟 index.html 檔案。")
+    if USE_SQLITE:
+        print("⚠️ 後端伺服器已在本機啟動，使用 SQLite 備用模式")
+    else:
+        print("✅ 後端伺服器已在本機啟動，使用 PostgreSQL")
     app.run(port=5000)
