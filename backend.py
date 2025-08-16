@@ -1,4 +1,4 @@
-# backend.py (Neon 升級版 - 智能資料庫切換)
+# backend.py (穩定版 - 智能資料庫切換)
 import json
 import os
 import requests
@@ -16,54 +16,74 @@ TMDB_BASE_URL = 'https://api.themoviedb.org/3'
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 
-# --- 智能資料庫選擇 ---
-DATABASE_URL = os.environ.get('DATABASE_URL')
+# --- 全域變數 ---
 USE_SQLITE = False
 engine = None
+db_lock = None
+DB_FILE = '/tmp/movie_ranking.db'
 
-print(f"🔍 檢查 DATABASE_URL: {DATABASE_URL[:50] + '...' if DATABASE_URL and len(DATABASE_URL) > 50 else DATABASE_URL}")
+# --- 智能資料庫初始化 ---
+def initialize_database():
+    global USE_SQLITE, engine, db_lock
+    
+    DATABASE_URL = os.environ.get('DATABASE_URL')
+    print(f"🔍 檢查 DATABASE_URL: {DATABASE_URL[:50] + '...' if DATABASE_URL and len(DATABASE_URL) > 50 else DATABASE_URL}")
+    
+    try:
+        # 檢查是否有有效的 DATABASE_URL
+        if not DATABASE_URL or len(DATABASE_URL) < 10 or DATABASE_URL.strip() == '' or DATABASE_URL == 'None':
+            raise Exception("DATABASE_URL 無效或未設定")
+        
+        # 嘗試連接 PostgreSQL
+        from sqlalchemy import create_engine, text
+        engine = create_engine(DATABASE_URL)
+        
+        # 測試連線
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1")).fetchone()
+        
+        if "neon" in DATABASE_URL.lower():
+            print("✅ 成功連接到 Neon PostgreSQL")
+        elif "supabase" in DATABASE_URL.lower():
+            print("✅ 成功連接到 Supabase PostgreSQL")
+        else:
+            print("✅ 成功連接到 PostgreSQL")
+        
+        USE_SQLITE = False
+        return True
+        
+    except Exception as e:
+        print(f"⚠️ PostgreSQL 連線失敗：{e}")
+        print("🔄 使用 SQLite 備用模式...")
+        
+        # 切換到 SQLite
+        USE_SQLITE = True
+        import sqlite3
+        import threading
+        db_lock = threading.Lock()
+        
+        try:
+            # 測試 SQLite
+            conn = sqlite3.connect(DB_FILE, check_same_thread=False)
+            conn.close()
+            print("✅ SQLite 備用模式初始化成功")
+            return True
+        except Exception as sqlite_error:
+            print(f"❌ SQLite 初始化也失敗：{sqlite_error}")
+            return False
 
-try:
-    # 檢查是否有有效的 DATABASE_URL
-    if not DATABASE_URL or len(DATABASE_URL) < 10 or DATABASE_URL == 'None':
-        raise Exception("DATABASE_URL 無效或未設定")
-    
-    # 嘗試連接 PostgreSQL (Neon)
-    from sqlalchemy import create_engine, text
-    engine = create_engine(DATABASE_URL)
-    
-    # 測試連線
-    with engine.connect() as connection:
-        connection.execute(text("SELECT 1")).fetchone()
-    
-    # 判斷資料庫類型
-    if "neon" in DATABASE_URL.lower():
-        print("✅ 成功連接到 Neon PostgreSQL")
-    elif "supabase" in DATABASE_URL.lower():
-        print("✅ 成功連接到 Supabase PostgreSQL")
-    else:
-        print("✅ 成功連接到 PostgreSQL")
-    
-    USE_SQLITE = False
-    
-except Exception as e:
-    print(f"⚠️ PostgreSQL 連線失敗：{e}")
-    print("🔄 降級到 SQLite 備用模式...")
-    USE_SQLITE = True
-    
-    # 匯入 SQLite 相關模組
-    import sqlite3
-    import threading
-    
-    DB_FILE = '/tmp/movie_ranking.db'
-    db_lock = threading.Lock()
+# 初始化資料庫
+database_initialized = initialize_database()
 
-# --- 資料庫初始化函式 ---
 def init_db():
-    """初始化資料庫"""
+    """初始化資料庫表格"""
+    if not database_initialized:
+        print("❌ 資料庫未初始化，跳過表格建立")
+        return False
+    
     try:
         if USE_SQLITE:
-            print("🔧 初始化 SQLite 資料庫...")
+            import sqlite3
             with db_lock:
                 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
@@ -75,12 +95,12 @@ def init_db():
                         )
                     ''')
                     conn.commit()
-                    print("✅ SQLite 資料庫初始化成功")
+                    print("✅ SQLite 資料表初始化成功")
                     return True
                 finally:
                     conn.close()
         else:
-            print("🔧 初始化 PostgreSQL 資料庫...")
+            from sqlalchemy import text
             with engine.connect() as connection:
                 connection.execute(text("""
                     CREATE TABLE IF NOT EXISTS users (
@@ -89,22 +109,24 @@ def init_db():
                     );
                 """))
                 connection.commit()
-                print("✅ PostgreSQL 資料庫初始化成功")
+                print("✅ PostgreSQL 資料表初始化成功")
                 return True
     except Exception as e:
-        print(f"❌ 資料庫初始化失敗：{e}")
+        print(f"❌ 資料表初始化失敗：{e}")
         return False
 
 # --- 輔助函式 ---
 def is_valid_username(username):
-    """檢查使用者名稱是否合法"""
     return username and re.match(r'^[a-zA-Z0-9]+$', username)
 
 # --- 資料庫操作函式 ---
 def user_exists(username):
-    """檢查使用者是否存在"""
+    if not database_initialized:
+        return False
+        
     try:
         if USE_SQLITE:
+            import sqlite3
             with db_lock:
                 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
@@ -114,6 +136,7 @@ def user_exists(username):
                 finally:
                     conn.close()
         else:
+            from sqlalchemy import text
             with engine.connect() as connection:
                 result = connection.execute(text("SELECT 1 FROM users WHERE username = :user"), {"user": username}).fetchone()
                 return result is not None
@@ -122,9 +145,12 @@ def user_exists(username):
         return False
 
 def load_ranked_movies(username):
-    """讀取使用者的電影列表"""
+    if not database_initialized:
+        return []
+        
     try:
         if USE_SQLITE:
+            import sqlite3
             with db_lock:
                 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
@@ -137,6 +163,7 @@ def load_ranked_movies(username):
                 finally:
                     conn.close()
         else:
+            from sqlalchemy import text
             with engine.connect() as connection:
                 result = connection.execute(text("SELECT movies FROM users WHERE username = :user"), {"user": username}).fetchone()
                 if result and result[0]:
@@ -147,9 +174,12 @@ def load_ranked_movies(username):
         return []
 
 def save_ranked_movies(username, movies):
-    """儲存使用者的電影列表"""
+    if not database_initialized:
+        return False
+        
     try:
         if USE_SQLITE:
+            import sqlite3
             with db_lock:
                 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
                 try:
@@ -167,6 +197,7 @@ def save_ranked_movies(username, movies):
                 finally:
                     conn.close()
         else:
+            from sqlalchemy import text
             movies_json = json.dumps(movies, ensure_ascii=False)
             with engine.connect() as connection:
                 connection.execute(text("""
@@ -187,8 +218,7 @@ def search_movie_from_tmdb(title):
         response = requests.get(search_url, params=params)
         response.raise_for_status()
         return response.json()['results']
-    except requests.exceptions.RequestException as e:
-        print(f"❌ TMDB 搜尋失敗：{e}")
+    except:
         return None
 
 def get_random_movie_from_tmdb():
@@ -207,8 +237,7 @@ def get_random_movie_from_tmdb():
         response.raise_for_status()
         results = response.json()['results']
         return random.choice(results) if results else None
-    except requests.exceptions.RequestException as e:
-        print(f"❌ TMDB 隨機電影失敗：{e}")
+    except:
         return None
 
 def recalculate_ratings_and_ranks(ranked_list, mode='normal'):
@@ -243,9 +272,16 @@ def index():
 
 @app.route('/api/db-info', methods=['GET'])
 def get_database_info():
-    """顯示資料庫資訊"""
     try:
+        if not database_initialized:
+            return jsonify({
+                'success': False,
+                'error': '資料庫未初始化',
+                'connection_status': 'Failed'
+            }), 500
+        
         if USE_SQLITE:
+            import sqlite3
             with db_lock:
                 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
                 conn.row_factory = sqlite3.Row
@@ -262,24 +298,32 @@ def get_database_info():
                         'total_users': user_count,
                         'sample_users': users,
                         'connection_status': 'SQLite Connected',
-                        'warning': '⚠️ 資料會在重新部署時遺失！請設定 Neon DATABASE_URL。'
+                        'warning': '⚠️ 資料會在重新部署時遺失！'
                     })
                 finally:
                     conn.close()
         else:
+            from sqlalchemy import text
             with engine.connect() as connection:
                 user_count = connection.execute(text("SELECT COUNT(*) FROM users")).fetchone()[0]
-                version_result = connection.execute(text("SELECT version()")).fetchone()
                 
-                # 取得使用者樣本
-                user_result = connection.execute(text("SELECT username FROM users LIMIT 3")).fetchall()
-                users = [row[0] for row in user_result]
+                try:
+                    version_result = connection.execute(text("SELECT version()")).fetchone()
+                    version_info = version_result[0].split(',')[0] if version_result else "Unknown"
+                except:
+                    version_info = "Unknown"
                 
-                # 判斷資料庫提供商
+                try:
+                    user_result = connection.execute(text("SELECT username FROM users LIMIT 3")).fetchall()
+                    users = [row[0] for row in user_result]
+                except:
+                    users = []
+                
+                DATABASE_URL = os.environ.get('DATABASE_URL', '')
                 provider = "PostgreSQL"
-                if DATABASE_URL and "neon" in DATABASE_URL.lower():
+                if "neon" in DATABASE_URL.lower():
                     provider = "Neon PostgreSQL"
-                elif DATABASE_URL and "supabase" in DATABASE_URL.lower():
+                elif "supabase" in DATABASE_URL.lower():
                     provider = "Supabase PostgreSQL"
                 
                 return jsonify({
@@ -287,27 +331,29 @@ def get_database_info():
                     'provider': provider,
                     'total_users': user_count,
                     'sample_users': users,
-                    'postgresql_version': version_result[0].split(',')[0],
+                    'postgresql_version': version_info,
                     'connection_status': 'PostgreSQL Connected',
-                    'note': '✅ 使用永久資料庫，資料不會遺失！'
+                    'note': '✅ 資料永久保存！'
                 })
     except Exception as e:
         return jsonify({
             'success': False,
             'error': str(e),
-            'connection_status': 'Connection failed'
+            'connection_status': 'Error'
         }), 500
 
 @app.route('/api/register', methods=['POST'])
 def register_user():
     try:
-        data = request.json
+        data = request.get_json()
         if not data:
             return jsonify({'error': '無效的請求資料'}), 400
             
         username = data.get('username')
-        print(f"🔍 註冊使用者：{username}")
         
+        if not username:
+            return jsonify({'error': '使用者名稱不能為空'}), 400
+            
         if not is_valid_username(username):
             return jsonify({'error': '無效的使用者名稱，只能使用英文字母和數字。'}), 400
         
@@ -315,7 +361,6 @@ def register_user():
             return jsonify({'error': '此使用者名稱已被註冊。'}), 409
         
         if save_ranked_movies(username, []):
-            print(f"✅ 使用者 {username} 註冊成功")
             return jsonify({'success': True, 'username': username})
         else:
             return jsonify({'error': '無法創建使用者，請稍後再試。'}), 500
@@ -327,12 +372,15 @@ def register_user():
 @app.route('/api/login', methods=['POST'])
 def login_user():
     try:
-        data = request.json
+        data = request.get_json()
         if not data:
             return jsonify({'error': '無效的請求資料'}), 400
             
         username = data.get('username')
         
+        if not username:
+            return jsonify({'error': '使用者名稱不能為空'}), 400
+            
         if not is_valid_username(username):
             return jsonify({'error': '無效的使用者名稱。'}), 400
         
@@ -388,7 +436,10 @@ def rank_movies():
     if not username:
         return jsonify({'error': '未提供使用者資訊'}), 401
         
-    data = request.json
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Invalid data format'}), 400
+        
     new_ranked_list = data.get('list')
     mode = data.get('mode', 'normal')
     
@@ -408,7 +459,10 @@ def save_review():
     if not username:
         return jsonify({'error': '未提供使用者資訊'}), 401
         
-    data = request.json
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Invalid data format'}), 400
+        
     movie_id = data.get('id')
     review_text = data.get('review')
     
@@ -456,11 +510,9 @@ def get_random_movie():
             
     return jsonify({'error': 'Could not find a new random movie'}), 500
 
-# --- 應用程式啟動 ---
+# 初始化資料表
+init_db()
+
 if __name__ == '__main__':
-    print("🚀 電影排名系統啟動中...")
-    init_db()
+    print("🚀 電影排名系統啟動...")
     app.run(port=5000)
-else:
-    print("🚀 電影排名系統在 Render 上啟動...")
-    init_db()
