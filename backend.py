@@ -202,7 +202,7 @@ def save_ranked_movies(username, movies):
             with engine.connect() as connection:
                 connection.execute(text("""
                     INSERT INTO users (username, movies) VALUES (:user, :movies_json)
-                    ON CONFLICT (username) DO UPDATE SET movies = :movies_json::jsonb;
+                    ON CONFLICT (username) DO UPDATE SET movies = EXCLUDED.movies;
                 """), {"user": username, "movies_json": movies_json})
                 connection.commit()
             return True
