@@ -1,4 +1,6 @@
-# 電影排名與評分系統
+# Normal-Distribution-Movie-Ranker
+
+This is a movie ranking and rating system that allows users to create personalized movie lists and rank and rate them through an interactive interface.
 
 這是一個電影排名與評分系統，讓使用者可以建立個人化的電影清單，並透過互動式介面為其排名與評分。
 
