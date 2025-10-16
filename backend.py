@@ -479,10 +479,15 @@ def search_movies():
         
     return jsonify(results)
 
-@app.route('/api/random', methods=['GET'])
+@app.route('/api/random', methods=['POST'])
 def get_random_movie():
-    existing_ids_str = request.args.get('existing_ids', '')
-    existing_ids = {int(id) for id in existing_ids_str.split(',') if id}
+
+    data = request.get_json()
+    if not data:
+        return jsonify({'error': 'Invalid request data'}), 400
+        
+    existing_ids_list = data.get('existing_ids', [])
+    existing_ids = set(existing_ids_list)
 
     for _ in range(5):
         discover_url = f"{TMDB_BASE_URL}/discover/movie"
@@ -522,4 +527,5 @@ init_db()
 if __name__ == '__main__':
     print("🚀 電影排名系統啟動...")
     app.run(port=5000)
+
 
