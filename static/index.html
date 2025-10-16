@@ -333,8 +333,8 @@
 
         randomBtn.onclick = async () => {
             randomBtn.disabled = true; randomBtn.innerText = "尋找中...";
-            const existingIds = rankedMovies.map(m => m.id).join(',');
-            const movie = await fetchAPI(`/api/random?existing_ids=${existingIds}`);
+            const existingIds = rankedMovies.map(m => m.id); 
+            const movie = await postAPI('/api/random', { existing_ids: existingIds });
             if (movie && movie.id) {
                 const container = document.getElementById('discoveryItemContainer');
                 container.innerHTML = `
@@ -467,3 +467,4 @@
     </script>
 </body>
 </html>
+
