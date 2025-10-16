@@ -221,25 +221,6 @@ def search_movie_from_tmdb(title):
     except:
         return None
 
-def get_random_movie_from_tmdb():
-    discover_url = f"{TMDB_BASE_URL}/discover/movie"
-    random_page = random.randint(1, 500)
-    params = {
-        'api_key': API_KEY,
-        'language': 'zh-TW',
-        'sort_by': 'popularity.desc',
-        'page': random_page,
-        'include_adult': 'false',
-        'vote_count.gte': 100
-    }
-    try:
-        response = requests.get(discover_url, params=params)
-        response.raise_for_status()
-        results = response.json()['results']
-        return random.choice(results) if results else None
-    except:
-        return None
-
 def recalculate_ratings_and_ranks(ranked_list, mode='normal'):
     n = len(ranked_list)
     if n == 0:
@@ -502,13 +483,38 @@ def search_movies():
 def get_random_movie():
     existing_ids_str = request.args.get('existing_ids', '')
     existing_ids = {int(id) for id in existing_ids_str.split(',') if id}
+
+    for _ in range(5):
+        discover_url = f"{TMDB_BASE_URL}/discover/movie"
+        random_page = random.randint(1, 5000)
+        params = {
+            'api_key': API_KEY, 'language': 'zh-TW', 'sort_by': 'popularity.desc',
+            'page': random_page, 'include_adult': 'false', 'vote_count.gte': 100
+        }
+        
+        try:
+            response = requests.get(discover_url, params=params)
+            response.raise_for_status()
+            candidate_movies = response.json().get('results', [])
+
+            if not candidate_movies:
+                continue 
+
+            unseen_movies = [
+                movie for movie in candidate_movies 
+                if movie and movie.get('id') not in existing_ids
+            ]
+
+
+            if unseen_movies:
+                return jsonify(random.choice(unseen_movies))
+
+        except requests.RequestException as e:
+            print(f"❌ TMDB API 請求錯誤: {e}")
+            break 
     
-    for _ in range(10):
-        movie = get_random_movie_from_tmdb()
-        if movie and movie.get('id') not in existing_ids:
-            return jsonify(movie)
-            
-    return jsonify({'error': 'Could not find a new random movie'}), 500
+    return jsonify({'error': 'Could not find a new random movie after multiple attempts.'}), 500
+
 
 # 初始化資料表
 init_db()
@@ -516,3 +522,4 @@ init_db()
 if __name__ == '__main__':
     print("🚀 電影排名系統啟動...")
     app.run(port=5000)
+
