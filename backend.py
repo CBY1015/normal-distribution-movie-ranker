@@ -491,7 +491,7 @@ def get_random_movie():
 
     for _ in range(5):
         discover_url = f"{TMDB_BASE_URL}/discover/movie"
-        random_page = random.randint(1, 5000)
+        random_page = random.randint(1, 500)
         params = {
             'api_key': API_KEY, 'language': 'zh-TW', 'sort_by': 'popularity.desc',
             'page': random_page, 'include_adult': 'false', 'vote_count.gte': 100
@@ -527,5 +527,6 @@ init_db()
 if __name__ == '__main__':
     print("🚀 電影排名系統啟動...")
     app.run(port=5000)
+
 
 
